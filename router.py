@@ -192,52 +192,56 @@ async def train_with_file(
     models_str - список моделей;
     file - csv-файл с данными
     '''
-    models = []
-    unique_ids = []
-    for model_str in json.loads(models_str):
-        model = ModelConfig(
-            id=model_str["id"],
-            hyperparameters=model_str["hyperparameters"],
-            type=model_str["type"],
-        )
-        if services.find_id(model.id):
-            raise HTTPException(
-                status_code=500, detail=f"Model {model.id} is already fitted"
+    try:
+        models = []
+        unique_ids = []
+        for model_str in json.loads(models_str):
+            model = ModelConfig(
+                id=model_str["id"],
+                hyperparameters=model_str["hyperparameters"],
+                type=model_str["type"],
             )
-        models.append(model)
-        unique_ids.append(model_str['id'])
-    if len(unique_ids) > len(set(unique_ids)):
-        raise HTTPException(
-            status_code=500, detail="Found duplicated IDs"
+            if services.find_id(model.id):
+                raise HTTPException(
+                    status_code=500, detail=f"Model {model.id} is already fitted"
+                )
+            models.append(model)
+            unique_ids.append(model_str['id'])
+        if len(unique_ids) > len(set(unique_ids)):
+            raise HTTPException(
+                status_code=500, detail="Found duplicated IDs"
+            )
+        available_cpus = (
+            min(settings.NUM_CPUS, os.cpu_count()) - services.ACTIVE_PROCESSES
         )
-    available_cpus = (
-        min(settings.NUM_CPUS, os.cpu_count()) - services.ACTIVE_PROCESSES
-    )
-    train_proc_num = len(models)
-    if train_proc_num > available_cpus:
-        raise HTTPException(
-            status_code=500, detail="Too many models to train")
-    responses = []
-    df = pd.read_csv(file.file, index_col=settings.INDEX_COL)
-    X = df.drop(settings.NON_FEATURE_COLS + [settings.TARGET_COL], axis=1)
-    y = df[settings.TARGET_COL]
-    executor = pool.ProcessPoolExecutor(max_workers=train_proc_num)
-    services.ACTIVE_PROCESSES += train_proc_num
-    loop = asyncio.get_running_loop()
-    tasks = [
-        loop.run_in_executor(executor, services.fit, X, y, dict(model))
-        for model in models
-    ]
-    results = await asyncio.gather(*tasks)
-    services.ACTIVE_PROCESSES -= train_proc_num
-    for models_data in results:
-        model_id = models_data["id"]
-        status = models_data["status"]
-        if status == "trained":
-            services.MODELS_LIST[model_id] = models_data["model"]
-            services.MODELS_TYPES_LIST[model_id] = models_data["type"]
-        responses.append(IdResponse(id=model_id, status=status))
-    return responses
+        train_proc_num = len(models)
+        if train_proc_num > available_cpus:
+            raise HTTPException(
+                status_code=500, detail="Too many models to train")
+        responses = []
+        df = pd.read_csv(file.file, index_col=settings.INDEX_COL)
+        X = df.drop(settings.NON_FEATURE_COLS + [settings.TARGET_COL], axis=1)
+        y = df[settings.TARGET_COL]
+        executor = pool.ProcessPoolExecutor(max_workers=train_proc_num)
+        services.ACTIVE_PROCESSES += train_proc_num
+        loop = asyncio.get_running_loop()
+        tasks = [
+            loop.run_in_executor(executor, services.fit, X, y, dict(model))
+            for model in models
+        ]
+        results = await asyncio.gather(*tasks)
+        services.ACTIVE_PROCESSES -= train_proc_num
+        for models_data in results:
+            model_id = models_data["id"]
+            status = models_data["status"]
+            if status == "trained":
+                services.MODELS_LIST[model_id] = models_data["model"]   
+                services.MODELS_TYPES_LIST[model_id] = models_data["type"]
+            responses.append(IdResponse(id=model_id, status=status))
+        return responses
+    except:
+        import traceback
+        traceback.print_exc()
 
 
 @router.get("/get_current_model", response_model=MessageResponse)
