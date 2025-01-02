@@ -2,15 +2,15 @@ import os
 import pickle
 from pathlib import Path
 from typing import Any, Dict, List
-
-import func_timeout
-from settings import Settings
 from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, f1_score
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC
+
+from settings import Settings
+
 
 settings = Settings()
 
@@ -69,21 +69,18 @@ class Services:
                 steps=[("preprocessor", StandardScaler()),
                        ("classifier", model)]
             )
-            try:
-                func_timeout.func_timeout(10, pipeline.fit, args=(X, y))
-                pickle.dump(
-                    pipeline, open(
-                        f"{settings.MODEL_DIR}/{model_id}.pkl", "wb")
-                )
-                open(f"{settings.MODEL_DIR}/{model_id}", "w").write(mtype)
-                return {
-                    "id": model_id,
-                    "model": pipeline,
-                    "status": "trained",
-                    "type": mtype,
-                }
-            except func_timeout.FunctionTimedOut:
-                return {"id": model_id, "status": "not trained"}
+            pipeline.fit(X, y)
+            pickle.dump(
+                pipeline, open(
+                    f"{settings.MODEL_DIR}/{model_id}.pkl", "wb")
+            )
+            open(f"{settings.MODEL_DIR}/{model_id}", "w").write(mtype)
+            return {
+                "id": model_id,
+                "model": pipeline,
+                "status": "trained",
+                "type": mtype,
+            }
         except Exception:
             return {"id": model_id, "status": "error"}
 
