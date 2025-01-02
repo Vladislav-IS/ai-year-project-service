@@ -1,3 +1,5 @@
+import asyncio
+import concurrent.futures as pool
 import json
 import os
 from typing import Annotated, Any, Dict, List, Literal, Optional
@@ -63,7 +65,7 @@ class DataColumnsResponse(BaseModel):
         }
 
 
-# ответ со спском моделей
+# ответ со списком типов моделей и гиперпараметров
 class ModelTypesResponse(BaseModel):
     models: Dict[str, List[str]]
 
@@ -82,7 +84,7 @@ class IdResponse(BaseModel):
         json_schema_extra = {"example": {"id": "Some id", "status": "load"}}
 
 
-# ответ
+# ответ в случае ошибки
 class RequestError(BaseModel):
     detail: str
 
@@ -92,7 +94,7 @@ class RequestError(BaseModel):
         }
 
 
-#
+# ответ с предсказаниями
 class PredictResponse(BaseModel):
     predictions: List[float]
     index: List[float]
@@ -108,7 +110,7 @@ class PredictResponse(BaseModel):
         }
 
 
-#
+# запрос на сравнение качества моделей
 class CompareModelsRequest(BaseModel):
     ids: List[str]
 
@@ -116,7 +118,7 @@ class CompareModelsRequest(BaseModel):
         json_schema_extra = {"example": {"ids": ["Some id"]}}
 
 
-#
+# ответ со сравнением качества моделей
 class CompareModelsResponse(BaseModel):
     results: Dict[str, Dict[str, float]]
 
@@ -124,7 +126,7 @@ class CompareModelsResponse(BaseModel):
         json_schema_extra = {"example": {"results": {"Some id": 1.0}}}
 
 
-#
+# ответ со списком обученных моделей
 class ModelsListResponse(BaseModel):
     models: List[ModelConfig]
 
@@ -208,16 +210,31 @@ async def train_with_file(
         raise HTTPException(
             status_code=500, detail="Found duplicated IDs"
         )
+    available_cpus = (
+        min(settings.NUM_CPUS, os.cpu_count()) - services.ACTIVE_PROCESSES
+    )
+    train_proc_num = len(models)
+    if train_proc_num > available_cpus:
+        raise HTTPException(
+            status_code=500, detail="Too many models to train")
     responses = []
     df = pd.read_csv(file.file, index_col=settings.INDEX_COL)
     X = df.drop(settings.NON_FEATURE_COLS + [settings.TARGET_COL], axis=1)
     y = df[settings.TARGET_COL]
-    results = [services.fit(X, y, dict(model)) for model in models]
+    executor = pool.ProcessPoolExecutor(max_workers=train_proc_num)
+    services.ACTIVE_PROCESSES += train_proc_num
+    loop = asyncio.get_running_loop()
+    tasks = [
+        loop.run_in_executor(executor, services.fit, X, y, dict(model))
+        for model in models
+    ]
+    results = await asyncio.gather(*tasks)
+    services.ACTIVE_PROCESSES -= train_proc_num
     for models_data in results:
         model_id = models_data["id"]
         status = models_data["status"]
         if status == "trained":
-            services.MODELS_LIST[model_id] = models_data["model"]   
+            services.MODELS_LIST[model_id] = models_data["model"]
             services.MODELS_TYPES_LIST[model_id] = models_data["type"]
         responses.append(IdResponse(id=model_id, status=status))
     return responses
@@ -237,7 +254,7 @@ async def get_status_api():
 
 @router.post(
     "/set_model/{model_id}",
-    responses={201: {"model": IdResponse}, 404: {"model": RequestError}},
+    responses={200: {"model": IdResponse}, 404: {"model": RequestError}},
 )
 async def set_model(model_id:
                     Annotated[str, "path-like id"] = Path(min_length=1)):
@@ -339,7 +356,7 @@ async def models_list():
 
 @router.delete(
     "/remove/{model_id}",
-    responses={200: {"model": IdResponse}, 404: {"model": RequestError}},
+    responses={200: {"model": IdResponse}, 500: {"model": RequestError}},
 )
 async def remove(model_id: Annotated[str, "path-like id"] =
                  Path(min_length=1)):
@@ -353,11 +370,16 @@ async def remove(model_id: Annotated[str, "path-like id"] =
     return IdResponse(id=model_id, status="removed")
 
 
-@router.delete("/remove_all", response_model=List[IdResponse])
+@router.delete("/remove_all", responses={
+    200: {'model': List[IdResponse]},
+    500: {'model': RequestError}
+})
 async def remove_all_api():
     '''
     очистка списка моделей
     '''
+    if len(services.MODELS_TYPES_LIST) == 0:
+        raise HTTPException(status_code=500, detail="Models list not found")
     responses = []
     ids = services.remove_all()
     for model_id in ids:
