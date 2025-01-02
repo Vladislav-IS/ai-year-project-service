@@ -1,14 +1,29 @@
-from typing import Optional
-
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from router import MessageResponse, router
+from settings import Settings
 
-app = FastAPI()
+settings = Settings()
+
+app = FastAPI(
+    title="year_project",
+    docs_url="/api/year_project",
+    openapi_url="/api/year_project.json",
+)
+
+app.include_router(router, prefix="/api/model_service")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
-@app.get("/")
+@app.get("/", response_model=MessageResponse)
 async def root():
-    return {"message": "Hello World"}
-
-@app.get("/items/{item_id}")
-def read_item(item_id: int, q: Optional[str] = None):
-    return {"item_id": item_id, "q": q}
+    '''
+    коренвой GET-запрос
+    '''
+    return MessageResponse(message="Ready to work!")
