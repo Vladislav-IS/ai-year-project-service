@@ -1,5 +1,3 @@
-import asyncio
-import concurrent.futures as pool
 import json
 import os
 from typing import Annotated, Any, Dict, List, Literal, Optional
@@ -210,26 +208,10 @@ async def train_with_file(
         raise HTTPException(
             status_code=500, detail="Found duplicated IDs"
         )
-    available_cpus = (
-        min(settings.NUM_CPUS, os.cpu_count()) - services.ACTIVE_PROCESSES
-    )
-    train_proc_num = len(models)
-    if train_proc_num > available_cpus:
-        raise HTTPException(
-            status_code=500, detail="Too many models to train")
-    responses = []
     df = pd.read_csv(file.file, index_col=settings.INDEX_COL)
     X = df.drop(settings.NON_FEATURE_COLS + [settings.TARGET_COL], axis=1)
     y = df[settings.TARGET_COL]
-    executor = pool.ProcessPoolExecutor(max_workers=train_proc_num)
-    services.ACTIVE_PROCESSES += train_proc_num
-    loop = asyncio.get_running_loop()
-    tasks = [
-        loop.run_in_executor(executor, services.fit, X, y, dict(model))
-        for model in models
-    ]
-    results = await asyncio.gather(*tasks)
-    services.ACTIVE_PROCESSES -= train_proc_num
+    results = [services.fit(X, y, dict(model)) for model in models]
     for models_data in results:
         model_id = models_data["id"]
         status = models_data["status"]
